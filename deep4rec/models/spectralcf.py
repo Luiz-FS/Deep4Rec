@@ -1,6 +1,7 @@
 import tensorflow as tf
 import tensorflow.contrib.eager as tfe
 import numpy as np
+from tqdm import tqdm
 
 from deep4rec.models.model import Model
 
@@ -17,6 +18,7 @@ class SpectralCF(Model):
         self.batch_size = batch_size
         self.decay = decay
         self.ds = ds
+        self.lr = lr
 
         self.matrix_adj = self.adjacent_matrix()
         self.matrix_d = self.degree_matrix()
@@ -24,6 +26,10 @@ class SpectralCF(Model):
 
         self.lamda, self.U = np.linalg.eig(self.matrix_l)
         self.lamda = np.diag(self.lamda)
+
+        self.users = tf.placeholder(tf.int32, shape=(self.batch_size,))
+        self.pos_items = tf.placeholder(tf.int32, shape=(self.batch_size,))
+        self.neg_items = tf.placeholder(tf.int32, shape=(self.batch_size,))
 
         self.user_embeddings = tfe.Variable(
             tf.random_normal(
@@ -67,6 +73,23 @@ class SpectralCF(Model):
             all_embeddings, [self.num_users, self.num_items], 0
         )
 
+        self.u_embeddings = tf.nn.embedding_lookup(self.u_embeddings, self.users)
+        self.pos_i_embeddings = tf.nn.embedding_lookup(
+            self.i_embeddings, self.pos_items
+        )
+        self.neg_i_embeddings = tf.nn.embedding_lookup(
+            self.i_embeddings, self.neg_items
+        )
+
+        self.loss = self.create_bpr_loss(
+            self.u_embeddings, self.pos_i_embeddings, self.neg_i_embeddings
+        )
+        self.opt = tf.train.RMSPropOptimizer(learning_rate=lr)
+        self.updatess = self.opt.minimize(
+            self.loss,
+            var_list=[self.user_embeddings, self.item_embeddings] + self.filters,
+        )
+
     def adjacent_matrix(self, self_connection=False):
         matrix_adj = np.zeros(
             [self.num_users + self.num_items, self.num_users + self.num_items],
@@ -96,23 +119,51 @@ class SpectralCF(Model):
         return np.identity(self.num_users + self.num_items, dtype=np.float32) - tmp
 
     def create_bpr_loss(self, users, pos_items, neg_items):
-        def calculate_loss():
-            pos_scores = tf.reduce_sum(tf.multiply(users, pos_items), axis=1)
-            neg_scores = tf.reduce_sum(tf.multiply(users, neg_items), axis=1)
+        pos_scores = tf.reduce_sum(tf.multiply(users, pos_items), axis=1)
+        neg_scores = tf.reduce_sum(tf.multiply(users, neg_items), axis=1)
 
-            regularizer = (
-                tf.nn.l2_loss(users)
-                + tf.nn.l2_loss(pos_items)
-                + tf.nn.l2_loss(neg_items)
+        regularizer = (
+            tf.nn.l2_loss(users) + tf.nn.l2_loss(pos_items) + tf.nn.l2_loss(neg_items)
+        )
+        regularizer = regularizer / self.batch_size
+
+        maxi = tf.log(tf.nn.sigmoid(pos_scores - neg_scores))
+        loss = tf.negative(tf.reduce_mean(maxi)) + self.decay * regularizer
+        print(loss)
+        return loss
+
+    def train(
+        self,
+        ds,
+        epochs,
+        loss_function,
+        batch_size=128,
+        optimizer="adam",
+        run_eval=True,
+        verbose=True,
+        eval_metrics=None,
+        eval_loss_functions=None,
+        train_indexes=None,
+        valid_indexes=None,
+        early_stop=False,
+    ):
+        sess = tf.Session()
+        init = tf.initialize_all_variables()
+        sess.run(init)
+
+        for epoch in tqdm(range(epochs)):
+            users, pos_items, neg_items = ds.sample_pos_neg_items(batch_size)
+
+            (_, loss) = sess.run(
+                [self.updatess, self.loss],
+                feed_dict={
+                    self.users: users,
+                    self.pos_items: pos_items,
+                    self.neg_items: neg_items,
+                },
             )
-            regularizer = regularizer / self.batch_size
 
-            maxi = tf.log(tf.nn.sigmoid(pos_scores - neg_scores))
-            loss = tf.negative(tf.reduce_mean(maxi)) + self.decay * regularizer
             print(loss)
-            return loss
-
-        return calculate_loss
 
     def call(self, one_hot_features, training=False, features=None, **kwargs):
         features = [[], []]

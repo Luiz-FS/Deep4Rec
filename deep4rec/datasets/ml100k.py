@@ -10,6 +10,7 @@ import numpy as np
 import random as rd
 from sklearn.preprocessing import OrdinalEncoder
 from sklearn.model_selection import ShuffleSplit
+import tensorflow as tf
 
 from deep4rec.datasets.dataset import Dataset
 from deep4rec.datasets.dataset import DatasetTask
@@ -146,7 +147,12 @@ class MovieLens100kDataset(Dataset):
 
         return graph
 
-    def sample_pos_neg_items(self, users):
+    def sample_pos_neg_items(self, batch_size):
+        if batch_size <= self.num_users:
+            users = rd.sample(range(1, self.num_users), batch_size)
+        else:
+            users = [rd.choice(range(1, self.num_users)) for _ in range(batch_size)]
+
         def sample_pos_items_for_u(u, num):
             pos_items = self.users_id_items_id[u]
             if len(pos_items) >= num:
