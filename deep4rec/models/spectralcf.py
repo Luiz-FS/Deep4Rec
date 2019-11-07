@@ -129,7 +129,6 @@ class SpectralCF(Model):
 
         maxi = tf.log(tf.nn.sigmoid(pos_scores - neg_scores))
         loss = tf.negative(tf.reduce_mean(maxi)) + self.decay * regularizer
-        print(loss)
         return loss
 
     def train(
@@ -147,6 +146,7 @@ class SpectralCF(Model):
         valid_indexes=None,
         early_stop=False,
     ):
+        self._losses = {"train": [], "validation": [], "test": []}
         sess = tf.Session()
         init = tf.initialize_all_variables()
         sess.run(init)
@@ -163,7 +163,38 @@ class SpectralCF(Model):
                 },
             )
 
-            print(loss)
+            self._eval_and_store_results(sess, "train", ds, verbose)
+            self._eval_and_store_results(sess, "test", ds, verbose)
+
+    def _eval_and_store_results(self, session, ds_key, ds, verbose):
+        loss = self.eval(
+            session,
+            ds
+        )
+
+        if loss:
+            self._losses[ds_key].append(loss)
+            if verbose:
+                self._print_res("%s losses" % ds_key, loss)
+
+    
+    def eval(self, session, ds, loss_functions=[], metrics=None):
+        users, pos_items, neg_items = ds.sample_pos_neg_items(self.batch_size)
+
+        loss = session.run(
+            self.loss,
+            feed_dict={
+                self.users: users,
+                self.pos_items: pos_items,
+                self.neg_items: neg_items,
+            }
+        )
+
+        loss_function_res = {
+            "bpr": float(loss)
+        }
+        
+        return loss_function_res
 
     def call(self, one_hot_features, training=False, features=None, **kwargs):
         features = [[], []]
