@@ -6,6 +6,8 @@ MovieLens 100k dataset: https://grouplens.org/datasets/movielens/100k/
 import os
 
 import numpy as np
+
+import random as rd
 from sklearn.preprocessing import OrdinalEncoder
 from sklearn.model_selection import ShuffleSplit
 
@@ -31,9 +33,12 @@ class MovieLens100kDataset(Dataset):
         self._counter = 0
         self.user_index = {}
         self.item_index = {}
+        self.index_user_id = {}
+        self.index_item_id = {}
 
         # Stores users -> items in train data
         self.users_items = {}
+        self.users_id_items_id = {}
         # Store `users_items` index in train data
         self._ui_index = {}
 
@@ -49,9 +54,12 @@ class MovieLens100kDataset(Dataset):
 
     def preprocess(self):
         utils.maybe_uncompress(self.zip_path)
-        self.train_data, self.train_y, self.train_users, self.train_items = self._load_data(
-            "ua.base", is_train=True
-        )
+        (
+            self.train_data,
+            self.train_y,
+            self.train_users,
+            self.train_items,
+        ) = self._load_data("ua.base", is_train=True)
         self.test_data, self.test_y, self.test_users, self.test_items = self._load_data(
             "ua.test", is_train=False
         )
@@ -81,16 +89,22 @@ class MovieLens100kDataset(Dataset):
 
                 if user_id not in self.user_index:
                     self.user_index[user_id] = self._counter
+                    self.index_user_id[self._counter] = int(user_id)
                     self._counter += 1
 
                 if movie_id not in self.item_index:
                     self.item_index[movie_id] = self._counter
+                    self.index_item_id[self._counter] = int(movie_id)
                     self._counter += 1
+
+                if not int(user_id) in self.users_id_items_id:
+                    self.users_id_items_id[int(user_id)] = set()
 
                 data.append([self.user_index[user_id], self.item_index[movie_id]])
                 y.append(self._preprocess_target(rating))
                 users.add(user_id)
                 items.add(movie_id)
+                self.users_id_items_id[int(user_id)].add(int(movie_id))
 
         if is_train:
             self._store_users_items(data)
@@ -123,6 +137,36 @@ class MovieLens100kDataset(Dataset):
         for train_index, test_index in zip(train_splits, test_splits):
             yield train_index, test_index
 
+    def build_graph(self):
+        graph = np.zeros((self.num_users, self.num_items), dtype=np.float32)
+
+        for (user, items) in self.users_id_items_id.items():
+            for item in items:
+                graph[user, item] = 1
+
+        return graph
+
+    def sample_pos_neg_items(self, users):
+        def sample_pos_items_for_u(u, num):
+            pos_items = self.users_id_items_id[u]
+            if len(pos_items) >= num:
+                return rd.sample(pos_items, num)
+            else:
+                return [rd.choice(pos_items) for _ in range(num)]
+
+        def sample_neg_items_for_u(u, num):
+            neg_items = list(
+                set(range(self.num_items)) - set(self.users_id_items_id[u])
+            )
+            return rd.sample(neg_items, num)
+
+        pos_items, neg_items = [], []
+        for u in users:
+            pos_items += sample_pos_items_for_u(u, 1)
+            neg_items += sample_neg_items_for_u(u, 1)
+
+        return users, pos_items, neg_items
+
     @property
     def train_features(self):
         return [self.train_data]
@@ -142,6 +186,14 @@ class MovieLens100kDataset(Dataset):
     @property
     def items(self):
         return self.train_items
+
+    @property
+    def num_items(self):
+        return 1683
+
+    @property
+    def num_users(self):
+        return 944
 
     @property
     def num_features_one_hot(self):
