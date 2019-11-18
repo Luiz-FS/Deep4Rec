@@ -14,6 +14,7 @@ from sklearn.model_selection import ShuffleSplit
 from deep4rec.datasets.dataset import Dataset
 from deep4rec.datasets.dataset import DatasetTask
 import deep4rec.utils as utils
+from deep4rec.datasets import movielens_helper as ml_helper
 
 
 class MovieLens100kDataset(Dataset):
@@ -33,6 +34,7 @@ class MovieLens100kDataset(Dataset):
         self._counter = 0
         self.user_index = {}
         self.item_index = {}
+        self.item_genres_index = {}
         self.index_user_id = {}
         self.index_item_id = {}
 
@@ -74,10 +76,20 @@ class MovieLens100kDataset(Dataset):
                 "{} does not support {} task.".format(self.dataset_name, self.task)
             )
 
+    def _load_genres_data(self):
+        filepath = os.path.join(self.preprocessed_path, "u.item")
+        with open(filepath, encoding="ISO-8859-1") as f:
+            for line in f:
+                item_data = line.split("|")
+                item_id = item_data[0]
+                item_genres = list(map(int, item_data[5::]))
+                self.item_genres_index[item_id] = item_genres
+
     def _load_data(self, filename, is_train):
         data, y = [], []
         users, items = set(), set()
         filepath = os.path.join(self.preprocessed_path, filename)
+        self._load_genres_data()
         with open(filepath) as f:
             for line in f:
                 (user_id, movie_id, rating, _) = line.split("\t")
@@ -100,7 +112,14 @@ class MovieLens100kDataset(Dataset):
                 if not int(user_id) in self.users_id_items_id:
                     self.users_id_items_id[int(user_id)] = set()
 
-                data.append([self.user_index[user_id], self.item_index[movie_id]])
+                data.append(
+                    [
+                        self.user_index[user_id],
+                        self.item_index[movie_id],
+                        *self.item_genres_index[movie_id],
+                    ]
+                )
+
                 y.append(self._preprocess_target(rating))
                 users.add(user_id)
                 items.add(movie_id)
@@ -112,7 +131,7 @@ class MovieLens100kDataset(Dataset):
         return (np.array(data), np.array(y), users, items)
 
     def _store_users_items(self, vect_data):
-        for i, (user, item) in enumerate(vect_data):
+        for i, (user, item, *_) in enumerate(vect_data):
             if user not in self.users_items:
                 self.users_items[user] = set()
             self.users_items[user].add(item)
@@ -197,8 +216,8 @@ class MovieLens100kDataset(Dataset):
 
     @property
     def num_features_one_hot(self):
-        return len(self.users) + len(self.items)
+        return len(self.users) + len(self.items) + ml_helper.NUM_GENRES
 
     @property
     def num_features(self):
-        return 2
+        return 21
